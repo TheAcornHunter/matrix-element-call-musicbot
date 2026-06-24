@@ -44,6 +44,16 @@ function clampInt16(value) {
     return value;
 }
 
+function stepGainTowards(gain, targetGain, stepPerSample) {
+    if (gain < targetGain) {
+        return Number.isFinite(stepPerSample) ? Math.min(targetGain, gain + stepPerSample) : targetGain;
+    }
+    if (gain > targetGain) {
+        return Number.isFinite(stepPerSample) ? Math.max(targetGain, gain - stepPerSample) : targetGain;
+    }
+    return gain;
+}
+
 function normalizeVolumePercent(value) {
     if (!Number.isFinite(value)) return 100;
     const bounded = Math.max(0, Math.min(200, Math.trunc(value)));
@@ -75,7 +85,7 @@ function parseNonNegativeFloatEnv(name, defaultValue) {
     return parsed;
 }
 
-function parseBoundedIntEnv(name, defaultValue, minValue, maxValue) {
+function parseClampedIntEnv(name, defaultValue, minValue, maxValue) {
     const parsed = parseNonNegativeIntEnv(name, defaultValue);
     return Math.max(minValue, Math.min(maxValue, Math.trunc(parsed)));
 }
@@ -128,7 +138,7 @@ const audioSettings = {
     volumePercent: parseNonNegativeIntEnv("VOLUME_PERCENT", 100),
     ducking: {
         enabled: parseBoolEnv("DUCKING_ENABLED", false),
-        duckToPercent: parseBoundedIntEnv("DUCK_TO_PERCENT", 35, 0, 200),
+        duckToPercent: parseClampedIntEnv("DUCK_TO_PERCENT", 35, 0, 200),
         attackMs: parseNonNegativeIntEnv("DUCKING_ATTACK_MS", 120),
         releaseMs: parseNonNegativeIntEnv("DUCKING_RELEASE_MS", 500),
         holdMs: parseNonNegativeIntEnv("DUCKING_HOLD_MS", 250),
@@ -433,6 +443,7 @@ class CallWorker {
         });
         this._livekitEventHandlersAttached = false;
         this._remoteAudioMonitors = new Map();
+        this._remoteMonitorCounter = 0;
     }
 
     setVolumePercent(value) {
@@ -454,7 +465,7 @@ class CallWorker {
         return Math.sqrt(sumSquares / frame.data.length);
     }
 
-    _attachLivekitDuckingHandlers(room) {
+    _attachLiveKitDuckingHandlers(room) {
         if (this._livekitEventHandlersAttached || !room || !audioSettings.ducking.enabled) {
             return;
         }
@@ -470,8 +481,7 @@ class CallWorker {
             }
         };
 
-        const onTrackSubscribed = (track, publication, participant) => {
-            void publication;
+        const onTrackSubscribed = (track, _publication, participant) => {
             this._startRemoteAudioMonitor(track, participant);
         };
 
@@ -497,7 +507,7 @@ class CallWorker {
         this._onTrackUnsubscribed = onTrackUnsubscribed;
     }
 
-    _detachLivekitDuckingHandlers(room) {
+    _detachLiveKitDuckingHandlers(room) {
         if (!this._livekitEventHandlersAttached || !room) {
             return;
         }
@@ -541,7 +551,7 @@ class CallWorker {
         if (!participantIdentity || participantIdentity === this.userId) {
             return;
         }
-        const trackSid = track.sid || `${participantIdentity}:${Date.now()}`;
+        const trackSid = track.sid || `${participantIdentity}:fallback:${this._remoteMonitorCounter++}`;
         if (this._remoteAudioMonitors.has(trackSid)) {
             return;
         }
@@ -573,8 +583,8 @@ class CallWorker {
                 this._remoteAudioMonitors.delete(trackSid);
                 try {
                     reader.releaseLock();
-                } catch {
-                    // best effort cleanup
+                } catch (error) {
+                    logLine(`ducking monitor release-lock warning: ${error instanceof Error ? error.message : String(error)}`);
                 }
             }
         })();
@@ -676,7 +686,7 @@ class CallWorker {
         }
 
         this.livekitRoom = room;
-        this._attachLivekitDuckingHandlers(room);
+        this._attachLiveKitDuckingHandlers(room);
         emit({ event: "livekit_connected", auth_mode: config._auth_mode || "unknown" });
     }
 
@@ -802,11 +812,7 @@ class CallWorker {
                     const targetGain = this.duckingController.getTargetGain(this.targetVolumeGain, Date.now());
                     const stepPerSample = this.duckingController.getRampStepPerSample(targetGain < gain);
                     for (let i = 0; i < frameData.length; i += 1) {
-                        if (gain < targetGain) {
-                            gain = Number.isFinite(stepPerSample) ? Math.min(targetGain, gain + stepPerSample) : targetGain;
-                        } else if (gain > targetGain) {
-                            gain = Number.isFinite(stepPerSample) ? Math.max(targetGain, gain - stepPerSample) : targetGain;
-                        }
+                        gain = stepGainTowards(gain, targetGain, stepPerSample);
                         frameData[i] = clampInt16(Math.round(frameData[i] * gain));
                     }
                     this.currentVolumeGain = gain;
@@ -850,11 +856,7 @@ class CallWorker {
                 const targetGain = this.duckingController.getTargetGain(this.targetVolumeGain, Date.now());
                 const stepPerSample = this.duckingController.getRampStepPerSample(targetGain < gain);
                 for (let i = 0; i < frameData.length; i += 1) {
-                    if (gain < targetGain) {
-                        gain = Number.isFinite(stepPerSample) ? Math.min(targetGain, gain + stepPerSample) : targetGain;
-                    } else if (gain > targetGain) {
-                        gain = Number.isFinite(stepPerSample) ? Math.max(targetGain, gain - stepPerSample) : targetGain;
-                    }
+                    gain = stepGainTowards(gain, targetGain, stepPerSample);
                     frameData[i] = clampInt16(Math.round(frameData[i] * gain));
                 }
                 this.currentVolumeGain = gain;
@@ -952,7 +954,7 @@ class CallWorker {
         this.audioSource = null;
 
         if (this.livekitRoom) {
-            this._detachLivekitDuckingHandlers(this.livekitRoom);
+            this._detachLiveKitDuckingHandlers(this.livekitRoom);
             this._stopAllRemoteAudioMonitors();
             await this.livekitRoom.disconnect();
             this.livekitRoom = null;

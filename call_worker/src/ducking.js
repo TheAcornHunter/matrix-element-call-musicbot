@@ -1,6 +1,6 @@
 const LEGACY_VOLUME_RAMP_STEP_PER_SAMPLE = 0.0005;
 
-function clampNumber(value, min, max) {
+function clampFiniteNumber(value, min, max) {
     if (!Number.isFinite(value)) {
         return min;
     }
@@ -12,14 +12,14 @@ function clampNumber(value, min, max) {
 function sanitizeDuckingSettings(input = {}) {
     const normalized = {
         enabled: Boolean(input.enabled),
-        duckToPercent: Math.trunc(clampNumber(input.duckToPercent ?? 35, 0, 200)),
-        attackMs: Math.max(0, Math.trunc(clampNumber(input.attackMs ?? 120, 0, Number.MAX_SAFE_INTEGER))),
-        releaseMs: Math.max(0, Math.trunc(clampNumber(input.releaseMs ?? 500, 0, Number.MAX_SAFE_INTEGER))),
-        holdMs: Math.max(0, Math.trunc(clampNumber(input.holdMs ?? 250, 0, Number.MAX_SAFE_INTEGER))),
-        vadThreshold: clampNumber(input.vadThreshold ?? 0.015, 0, 1),
+        duckToPercent: Math.trunc(clampFiniteNumber(input.duckToPercent ?? 35, 0, 200)),
+        attackMs: Math.trunc(clampFiniteNumber(input.attackMs ?? 120, 0, Number.MAX_SAFE_INTEGER)),
+        releaseMs: Math.trunc(clampFiniteNumber(input.releaseMs ?? 500, 0, Number.MAX_SAFE_INTEGER)),
+        holdMs: Math.trunc(clampFiniteNumber(input.holdMs ?? 250, 0, Number.MAX_SAFE_INTEGER)),
+        vadThreshold: clampFiniteNumber(input.vadThreshold ?? 0.015, 0, 1),
         minActiveSpeakers: Math.max(
             1,
-            Math.trunc(clampNumber(input.minActiveSpeakers ?? 1, 1, Number.MAX_SAFE_INTEGER)),
+            Math.trunc(clampFiniteNumber(input.minActiveSpeakers ?? 1, 1, Number.MAX_SAFE_INTEGER)),
         ),
     };
     return normalized;
@@ -27,8 +27,8 @@ function sanitizeDuckingSettings(input = {}) {
 
 class DuckingController {
     constructor(settings = {}, options = {}) {
-        this.sampleRate = Math.max(1, Math.trunc(clampNumber(options.sampleRate ?? 48000, 1, Number.MAX_SAFE_INTEGER)));
-        this.frameMs = Math.max(1, Math.trunc(clampNumber(options.frameMs ?? 20, 1, Number.MAX_SAFE_INTEGER)));
+        this.sampleRate = Math.max(1, Math.trunc(clampFiniteNumber(options.sampleRate ?? 48000, 1, Number.MAX_SAFE_INTEGER)));
+        this.frameMs = Math.max(1, Math.trunc(clampFiniteNumber(options.frameMs ?? 20, 1, Number.MAX_SAFE_INTEGER)));
         this.settings = sanitizeDuckingSettings(settings);
         this.activityWindowMs = Math.max(this.frameMs * 2, 80);
         this.holdUntilMs = 0;
@@ -50,7 +50,7 @@ class DuckingController {
             this.primarySpeakerCount = 0;
             return;
         }
-        this.primarySpeakerCount = Math.max(0, Math.trunc(clampNumber(count, 0, Number.MAX_SAFE_INTEGER)));
+        this.primarySpeakerCount = Math.max(0, Math.trunc(clampFiniteNumber(count, 0, Number.MAX_SAFE_INTEGER)));
         if (this.primarySpeakerCount >= this.settings.minActiveSpeakers) {
             this._noteSpeech(nowMs);
         }
@@ -83,14 +83,14 @@ class DuckingController {
     }
 
     getTargetGain(baseGain, nowMs = Date.now()) {
-        const normalizedBase = clampNumber(baseGain, 0, 2);
+        const normalizedBase = clampFiniteNumber(baseGain, 0, 2);
         if (!this.settings.enabled) {
             return normalizedBase;
         }
         if (!this.isSpeechActive(nowMs)) {
             return normalizedBase;
         }
-        return clampNumber(normalizedBase * (this.settings.duckToPercent / 100), 0, 2);
+        return clampFiniteNumber(normalizedBase * (this.settings.duckToPercent / 100), 0, 2);
     }
 
     getRampStepPerSample(isAttack) {
@@ -127,5 +127,5 @@ module.exports = {
     DuckingController,
     sanitizeDuckingSettings,
     LEGACY_VOLUME_RAMP_STEP_PER_SAMPLE,
-    clampNumber,
+    clampFiniteNumber,
 };
