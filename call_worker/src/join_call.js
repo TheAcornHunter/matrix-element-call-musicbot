@@ -474,7 +474,7 @@ class CallWorker {
         if (participant.isLocal === true) {
             return true;
         }
-        const identity = String(participant.identity || "");
+        const identity = participant.identity ? String(participant.identity) : "";
         if (identity && this._selfIdentityCandidates.has(identity)) {
             return true;
         }
