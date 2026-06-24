@@ -227,6 +227,62 @@ class AudioQueue:
     def normalize_title(title: str) -> str:
         return " ".join(title.split())
 
+    @staticmethod
+    def is_youtube_target(target: str) -> bool:
+        """Return whether a target uses YouTube URLs or ytsearch shortcuts."""
+        candidate = (target or "").strip()
+        if not candidate:
+            return False
+
+        if candidate.casefold().startswith("ytsearch"):
+            return True
+
+        parsed = urlparse(candidate)
+        host = (parsed.hostname or "").lower()
+        return host in {
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+            "music.youtube.com",
+            "youtu.be",
+            "www.youtu.be",
+        }
+
+    @staticmethod
+    def is_unavailable_format_error(message: str) -> bool:
+        """Return whether yt-dlp reported an unavailable requested format."""
+        lowered = (message or "").casefold()
+        return (
+            "format is not available" in lowered
+            or "format not available" in lowered
+        )
+
+    def _ytdlp_extractor_arg_variants(self, target: str) -> list[list[str]]:
+        """Return extractor-arg variants to try in order.
+
+        YouTube targets first use the custom player-client extractor arguments and
+        then fall back to an empty list, which removes those custom arguments on
+        retry when yt-dlp reports an unavailable format.
+        """
+        primary = self._ytdlp_youtube_args()
+        if self.is_youtube_target(target):
+            return [primary, []]
+        return [primary]
+
+    @staticmethod
+    def should_retry_without_extractor_args(
+        attempt_index: int,
+        extractor_args: list[str],
+        error_message: str,
+        extractor_arg_variants: list[list[str]],
+    ) -> bool:
+        """Return whether to retry the next variant without custom extractor args."""
+        return (
+            attempt_index + 1 < len(extractor_arg_variants)
+            and len(extractor_args) > 0
+            and AudioQueue.is_unavailable_format_error(error_message)
+        )
+
     def get_audio_quality_for_ytdlp(self) -> str:
         quality_map = {
             "best": "0",
@@ -444,7 +500,7 @@ class AudioQueue:
         }
 
     async def _resolve_direct_stream_url(self, dlp_cmd: str, target: str) -> tuple[bool, str]:
-        cmd = [
+        base_cmd = [
             dlp_cmd,
             "--no-playlist",
             "-f",
@@ -454,17 +510,31 @@ class AudioQueue:
             str(self.extractor_retries),
         ]
         if self.search_mode == "fast":
-            cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
-        cmd.extend(self._ytdlp_youtube_args())
-        cmd.extend(self._ytdlp_cookies_args())
-        cmd.append(target)
-        code, stdout, stderr = await self._run_command(*cmd)
-        if code != 0:
-            return False, (stderr.strip() or "Failed to resolve stream URL")
-        lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-        if not lines:
-            return False, "No direct stream URL returned"
-        return True, lines[0]
+            base_cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
+
+        extractor_arg_variants = self._ytdlp_extractor_arg_variants(target)
+        last_error = "Failed to resolve stream URL"
+        for attempt_index, extractor_args in enumerate(extractor_arg_variants):
+            cmd = [*base_cmd, *extractor_args, *self._ytdlp_cookies_args(), target]
+            code, stdout, stderr = await self._run_command(*cmd)
+            if code == 0:
+                lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+                if not lines:
+                    return False, "No direct stream URL returned"
+                return True, lines[0]
+
+            error_message = stderr.strip() or "Failed to resolve stream URL"
+            last_error = error_message
+            if self.should_retry_without_extractor_args(
+                attempt_index, extractor_args, error_message, extractor_arg_variants
+            ):
+                logger.warning(
+                    "yt-dlp stream lookup hit unavailable format; retrying without custom player-client extractor arguments"
+                )
+                continue
+            return False, error_message
+
+        return False, last_error
 
     async def resolve_playlist_entries(self, url: str) -> tuple[bool, dict | str]:
         """Resolve playlist metadata and entry URLs for a playlist URL.
@@ -618,7 +688,7 @@ class AudioQueue:
         final_output_path = self.audio_dir / f"{url_hash}.{self.download_format}"
         final_output = str(final_output_path)
 
-        cmd = [
+        base_cmd = [
             dlp_cmd,
             "-x",
             "--audio-format",
@@ -630,11 +700,8 @@ class AudioQueue:
             "-o",
             temp_output,
         ]
-        cmd.extend(self._ytdlp_youtube_args())
-        cmd.extend(self._ytdlp_cookies_args())
-        cmd.append(source_url)
         if self.search_mode == "fast":
-            cmd[1:1] = ["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))]
+            base_cmd[1:1] = ["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))]
 
         logger.info(
             "Audio download selected: format=%s (yt-dlp=%s), quality=%s",
@@ -644,13 +711,33 @@ class AudioQueue:
         )
 
         try:
-            process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            _, stderr = await process.communicate()
+            extractor_arg_variants = self._ytdlp_extractor_arg_variants(source_url)
+            download_succeeded = False
+            last_error = "Failed to download audio"
+            for attempt_index, extractor_args in enumerate(extractor_arg_variants):
+                cmd = [*base_cmd, *extractor_args, *self._ytdlp_cookies_args(), source_url]
+                process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                _, stderr = await process.communicate()
 
-            if process.returncode != 0:
+                if process.returncode == 0:
+                    download_succeeded = True
+                    break
+
                 error_msg = stderr.decode().strip() if stderr else "Unknown error"
+                last_error = error_msg
+                if self.should_retry_without_extractor_args(
+                    attempt_index, extractor_args, error_msg, extractor_arg_variants
+                ):
+                    logger.warning(
+                        "yt-dlp download hit unavailable format; retrying without custom player-client extractor arguments"
+                    )
+                    continue
+
                 logger.error(f"yt-dlp failed: {error_msg}")
                 return False, error_msg
+
+            if not download_succeeded:
+                return False, last_error
 
             temp_candidates = [
                 p
