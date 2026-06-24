@@ -29,7 +29,8 @@ COPY . /app
 
 RUN useradd -m -u 10001 musicbot \
     && mkdir -p /app/logs /app/data /tmp/musicbot_audio \
-    && chown -R musicbot:musicbot /app /tmp/musicbot_audio
+    && chown -R musicbot:musicbot /app /tmp/musicbot_audio /opt/venv \
+    && chmod +x /app/start.sh
 
 USER musicbot
 
@@ -38,4 +39,4 @@ ENV PYTHONUNBUFFERED=1
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD pgrep -f "python3 main.py" > /dev/null || exit 1
 
-CMD ["python3", "main.py"]
+CMD ["/app/start.sh"]
