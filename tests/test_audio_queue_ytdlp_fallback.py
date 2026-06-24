@@ -18,25 +18,27 @@ class FakeProcess:
 
 class AudioQueueYtdlpFallbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_direct_stream_url_retries_without_extractor_args(self):
-        queue = AudioQueue(Path("/tmp/audio-queue-fallback"), preroll_silence=0)
-        runner = AsyncMock(
-            side_effect=[
-                (
-                    1,
-                    "",
-                    "ERROR: [youtube] 4Ba_qTPA4Ds: Requested format is not available. Use --list-formats for a list of available formats",
-                ),
-                (0, "https://stream.example/audio\n", ""),
-            ]
-        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queue = AudioQueue(Path(temp_dir), preroll_silence=0)
+            runner = AsyncMock(
+                side_effect=[
+                    (
+                        1,
+                        "",
+                        "ERROR: [youtube] 4Ba_qTPA4Ds: Requested format is not available. Use --list-formats for a list of available formats",
+                    ),
+                    (0, "https://stream.example/audio\n", ""),
+                ]
+            )
 
-        with patch.object(queue, "_run_command", runner):
-            ok, result = await queue._resolve_direct_stream_url("yt-dlp", "https://www.youtube.com/watch?v=4Ba_qTPA4Ds")
+            with patch.object(queue, "_run_command", runner):
+                ok, result = await queue._resolve_direct_stream_url("yt-dlp", "https://www.youtube.com/watch?v=4Ba_qTPA4Ds")
 
         self.assertTrue(ok)
         self.assertEqual(result, "https://stream.example/audio")
         self.assertEqual(runner.await_count, 2)
         self.assertIn("--extractor-args", runner.await_args_list[0].args)
+        self.assertIn("youtube:player_client=tv_embedded,ios,web", runner.await_args_list[0].args)
         self.assertNotIn("--extractor-args", runner.await_args_list[1].args)
 
     async def test_download_audio_retries_without_extractor_args(self):
@@ -64,11 +66,11 @@ class AudioQueueYtdlpFallbackTests(unittest.IsolatedAsyncioTestCase):
                 output_pattern.write_bytes(b"RIFF")
                 return FakeProcess(0)
 
-            def which_side_effect(value):
+            def fake_which(value):
                 return "/usr/bin/yt-dlp" if value == "yt-dlp" else None
 
             with (
-                patch("audio_queue.shutil.which", side_effect=which_side_effect),
+                patch("audio_queue.shutil.which", side_effect=fake_which),
                 patch.object(queue, "_resolve_media_info", AsyncMock(return_value=(True, resolved))),
                 patch.object(queue, "get_audio_duration", return_value=42.0),
                 patch("audio_queue.asyncio.create_subprocess_exec", new=fake_create_subprocess_exec),
@@ -80,6 +82,7 @@ class AudioQueueYtdlpFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["duration"], 42.0)
         self.assertEqual(len(calls), 2)
         self.assertIn("--extractor-args", calls[0])
+        self.assertIn("youtube:player_client=tv_embedded,ios,web", calls[0])
         self.assertNotIn("--extractor-args", calls[1])
 
 

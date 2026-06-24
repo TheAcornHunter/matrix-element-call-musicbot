@@ -229,6 +229,7 @@ class AudioQueue:
 
     @staticmethod
     def is_youtube_target(target: str) -> bool:
+        """Return whether a target uses YouTube URLs or ytsearch shortcuts."""
         candidate = (target or "").strip()
         if not candidate:
             return False
@@ -253,9 +254,11 @@ class AudioQueue:
 
     @staticmethod
     def is_unavailable_format_error(message: str) -> bool:
+        """Return whether yt-dlp reported an unavailable requested format."""
         return "requested format is not available" in (message or "").casefold()
 
     def _ytdlp_extractor_arg_variants(self, target: str) -> list[list[str]]:
+        """Return preferred extractor-arg fallbacks for the given target."""
         primary = self._ytdlp_youtube_args()
         if self.is_youtube_target(target):
             return [primary, []]
@@ -509,7 +512,7 @@ class AudioQueue:
                 and self.is_unavailable_format_error(error_message)
             ):
                 logger.warning(
-                    "yt-dlp stream lookup hit unavailable format with alternate YouTube clients; retrying with default client selection"
+                    "yt-dlp stream lookup hit unavailable format with alternative YouTube clients; retrying with default client selection"
                 )
                 continue
             return False, error_message
@@ -711,7 +714,7 @@ class AudioQueue:
                     and self.is_unavailable_format_error(error_msg)
                 ):
                     logger.warning(
-                        "yt-dlp download hit unavailable format with alternate YouTube clients; retrying with default client selection"
+                        "yt-dlp download hit unavailable format with alternative YouTube clients; retrying with default client selection"
                     )
                     continue
 
