@@ -67,7 +67,7 @@ class AudioQueue:
         self.audio_quality = str(audio_quality or "best").strip().lower()
         if self.audio_quality not in {"best", "medium", "worst"}:
             self.audio_quality = "best"
-        self.cookies_file: Optional[Path] = cookies_file if cookies_file else None
+        self.cookies_file: Optional[Path] = cookies_file
 
         # Cache shape: {url: {"file": str, "music_duration": Optional[float]}}
         self.download_cache = {}
