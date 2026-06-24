@@ -22,6 +22,13 @@ class Config:
         "audio.normalize_audio": False,
         "audio.fade_in_ms": 120,
         "audio.volume_percent": 100,
+        "audio.ducking.enabled": False,
+        "audio.ducking.duck_to_percent": 35,
+        "audio.ducking.attack_ms": 120,
+        "audio.ducking.release_ms": 500,
+        "audio.ducking.hold_ms": 250,
+        "audio.ducking.vad_threshold": 0.015,
+        "audio.ducking.min_active_speakers": 1,
         "audio.cache_mode": "size_lru",
         "audio.cache_max_bytes": 1_073_741_824,
         "audio.cache_delete_after_playback": False,
@@ -97,6 +104,42 @@ class Config:
         )
         if self.VOLUME_PERCENT > 200:
             raise ValueError("VOLUME_PERCENT/audio.volume_percent must be between 0 and 200")
+        self.DUCKING_ENABLED = self._get_bool_path(
+            "DUCKING_ENABLED", ("audio", "ducking", "enabled"), self.DEFAULTS["audio.ducking.enabled"]
+        )
+        self.DUCK_TO_PERCENT = self._get_nonnegative_int_path(
+            "DUCK_TO_PERCENT",
+            ("audio", "ducking", "duck_to_percent"),
+            self.DEFAULTS["audio.ducking.duck_to_percent"],
+        )
+        self.DUCK_TO_PERCENT = min(200, self.DUCK_TO_PERCENT)
+        self.DUCKING_ATTACK_MS = self._get_nonnegative_int_path(
+            "DUCKING_ATTACK_MS",
+            ("audio", "ducking", "attack_ms"),
+            self.DEFAULTS["audio.ducking.attack_ms"],
+        )
+        self.DUCKING_RELEASE_MS = self._get_nonnegative_int_path(
+            "DUCKING_RELEASE_MS",
+            ("audio", "ducking", "release_ms"),
+            self.DEFAULTS["audio.ducking.release_ms"],
+        )
+        self.DUCKING_HOLD_MS = self._get_nonnegative_int_path(
+            "DUCKING_HOLD_MS",
+            ("audio", "ducking", "hold_ms"),
+            self.DEFAULTS["audio.ducking.hold_ms"],
+        )
+        self.DUCKING_VAD_THRESHOLD = self._get_nonnegative_float_path(
+            "DUCKING_VAD_THRESHOLD",
+            ("audio", "ducking", "vad_threshold"),
+            self.DEFAULTS["audio.ducking.vad_threshold"],
+        )
+        self.DUCKING_MIN_ACTIVE_SPEAKERS = self._get_nonnegative_int_path(
+            "DUCKING_MIN_ACTIVE_SPEAKERS",
+            ("audio", "ducking", "min_active_speakers"),
+            self.DEFAULTS["audio.ducking.min_active_speakers"],
+        )
+        if self.DUCKING_MIN_ACTIVE_SPEAKERS < 1:
+            raise ValueError("DUCKING_MIN_ACTIVE_SPEAKERS/audio.ducking.min_active_speakers must be >= 1")
         self.AUDIO_CACHE_MODE = (
             self._get_str("AUDIO_CACHE_MODE", "audio", "cache_mode", default=self.DEFAULTS["audio.cache_mode"])
             or self.DEFAULTS["audio.cache_mode"]
@@ -359,6 +402,50 @@ class Config:
             return False
         raise ValueError(f"{env_name}/{section}.{key} must be a boolean-like value, got: {raw!r}")
 
+    def _get_nonnegative_float_path(self, env_name: str, path: tuple[str, ...], default: float) -> float:
+        raw = os.environ.get(env_name)
+        if raw is None:
+            from_toml = self._toml_get(*path)
+            raw = str(from_toml) if from_toml is not None else None
+        if raw is None:
+            return default
+        try:
+            value = float(raw)
+        except ValueError as exc:
+            raise ValueError(f"{env_name}/{'/'.join(path)} must be a float, got: {raw!r}") from exc
+        if value < 0:
+            raise ValueError(f"{env_name}/{'/'.join(path)} must be >= 0, got: {value}")
+        return value
+
+    def _get_nonnegative_int_path(self, env_name: str, path: tuple[str, ...], default: int) -> int:
+        raw = os.environ.get(env_name)
+        if raw is None:
+            from_toml = self._toml_get(*path)
+            raw = str(from_toml) if from_toml is not None else None
+        if raw is None:
+            return default
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError(f"{env_name}/{'/'.join(path)} must be an integer, got: {raw!r}") from exc
+        if value < 0:
+            raise ValueError(f"{env_name}/{'/'.join(path)} must be >= 0, got: {value}")
+        return value
+
+    def _get_bool_path(self, env_name: str, path: tuple[str, ...], default: bool) -> bool:
+        raw = os.environ.get(env_name)
+        if raw is None:
+            from_toml = self._toml_get(*path)
+            raw = str(from_toml) if from_toml is not None else None
+        if raw is None:
+            return default
+        norm = raw.strip().lower()
+        if norm in {"1", "true", "yes", "on"}:
+            return True
+        if norm in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError(f"{env_name}/{'/'.join(path)} must be a boolean-like value, got: {raw!r}")
+
     @staticmethod
     def _load_dotenv_file():
         """Load key=value pairs from local .env into os.environ if unset."""
@@ -399,6 +486,13 @@ class Config:
             f"audio.normalize_audio = {str(cls.DEFAULTS['audio.normalize_audio']).lower()}",
             f"audio.fade_in_ms = {cls.DEFAULTS['audio.fade_in_ms']}",
             f"audio.volume_percent = {cls.DEFAULTS['audio.volume_percent']}",
+            f"audio.ducking.enabled = {str(cls.DEFAULTS['audio.ducking.enabled']).lower()}",
+            f"audio.ducking.duck_to_percent = {cls.DEFAULTS['audio.ducking.duck_to_percent']}",
+            f"audio.ducking.attack_ms = {cls.DEFAULTS['audio.ducking.attack_ms']}",
+            f"audio.ducking.release_ms = {cls.DEFAULTS['audio.ducking.release_ms']}",
+            f"audio.ducking.hold_ms = {cls.DEFAULTS['audio.ducking.hold_ms']}",
+            f"audio.ducking.vad_threshold = {cls.DEFAULTS['audio.ducking.vad_threshold']}",
+            f"audio.ducking.min_active_speakers = {cls.DEFAULTS['audio.ducking.min_active_speakers']}",
             "audio.cache_mode = size_lru | always_delete | never_delete",
             f"audio.cache_max_bytes = {cls.DEFAULTS['audio.cache_max_bytes']} (1GB)",
             f"audio.cache_delete_after_playback = {str(cls.DEFAULTS['audio.cache_delete_after_playback']).lower()}",

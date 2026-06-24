@@ -22,6 +22,26 @@ Discord-style music bot UX for Matrix: chat commands (`!play`, `!queue`, `!skip`
 - `audio.search_mode = "fast"` by default (faster query resolution)
 - `audio.stream_first_idle = true` by default (instant playback start when idle)
 
+## Audio Ducking
+
+You can lower music automatically while others speak:
+
+```toml
+[audio.ducking]
+enabled = true
+duck_to_percent = 35
+attack_ms = 120
+release_ms = 500
+hold_ms = 250
+vad_threshold = 0.015
+min_active_speakers = 1
+```
+
+Tuning tips for noisy rooms:
+- Increase `vad_threshold` if ducking triggers too often on background noise.
+- Increase `hold_ms` to reduce fast up/down pumping between short speech gaps.
+- Increase `duck_to_percent` for gentler ducking, lower it for stronger ducking.
+
 ## Important
 
 > [!WARNING]
