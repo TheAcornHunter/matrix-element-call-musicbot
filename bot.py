@@ -691,8 +691,8 @@ class IntegratedBot:
             raise
         except Exception as exc:
             logger.error(f"Call worker playback error: {exc}")
-            if "InvalidState - failed to capture frame" not in str(exc):
-                await self.send_message(room_id, f"❌ Playback worker error: {exc}")
+            notify_error = "InvalidState - failed to capture frame" not in str(exc)
+            retry_track: Optional[dict] = None
             async with self._playback_lock:
                 if expected_generation != self._playback_generation:
                     logger.info("Ignoring playback recovery (generation changed)")
@@ -705,6 +705,36 @@ class IntegratedBot:
                 self._cancel_auto_advance()
                 self._current_track_started_at = None
 
+                current_track = self.audio_queue.current
+                if (
+                    self.config.STREAM_RETRY_TO_FILE_ON_FAIL
+                    and isinstance(current_track, dict)
+                    and not current_track.get("file")
+                    and isinstance(current_track.get("stream_url"), str)
+                ):
+                    retry_track = current_track
+
+            if retry_track is not None:
+                await self.send_message(
+                    room_id,
+                    "⚠️ Stream failed. Retrying from cached file...",
+                    priority="critical",
+                )
+                fallback_ok = await self._retry_stream_track_as_file(room_id, retry_track)
+                if fallback_ok:
+                    await self.send_message(room_id, f"▶️ Now playing: {retry_track['title']}")
+                    return
+
+            if notify_error:
+                await self.send_message(room_id, f"❌ Playback worker error: {exc}")
+            async with self._playback_lock:
+                if expected_generation != self._playback_generation:
+                    logger.info("Ignoring playback recovery cleanup (generation changed)")
+                    return
+                current_source = self._track_source_ref(self.audio_queue.current)
+                if expected_source and current_source and current_source != expected_source:
+                    logger.info("Ignoring playback recovery cleanup (track changed)")
+                    return
                 if self.audio_queue.queue:
                     await self._advance_queue(room_id, force_next=True, pre_stop=False)
                     return
