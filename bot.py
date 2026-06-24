@@ -679,6 +679,46 @@ class IntegratedBot:
         self._background_load_task = None
         self._cancel_stream_prefetch()
 
+    def _matches_expected_playback_state(
+        self,
+        expected_generation: int,
+        expected_source: Optional[str],
+        *,
+        context: str,
+    ) -> bool:
+        if expected_generation != self._playback_generation:
+            logger.info("Ignoring %s (generation changed)", context)
+            return False
+        current_source = self._track_source_ref(self.audio_queue.current)
+        if expected_source and current_source and current_source != expected_source:
+            logger.info("Ignoring %s (track changed)", context)
+            return False
+        return True
+
+    async def _cleanup_failed_playback(
+        self,
+        room_id: str,
+        expected_generation: int,
+        expected_source: Optional[str],
+        *,
+        verify_state: bool,
+    ) -> bool:
+        """Return False only when cleanup is skipped due to a state mismatch."""
+        async with self._playback_lock:
+            if verify_state and not self._matches_expected_playback_state(
+                expected_generation,
+                expected_source,
+                context="playback recovery cleanup",
+            ):
+                return False
+            if self.audio_queue.queue:
+                await self._advance_queue(room_id, force_next=True, pre_stop=False)
+                return True
+
+            if self.audio_queue.current is not None:
+                self.audio_queue.current = None
+        return True
+
     async def _wait_for_worker_playback(
         self,
         room_id: str,
@@ -691,26 +731,52 @@ class IntegratedBot:
             raise
         except Exception as exc:
             logger.error(f"Call worker playback error: {exc}")
-            if "InvalidState - failed to capture frame" not in str(exc):
-                await self.send_message(room_id, f"❌ Playback worker error: {exc}")
+            notify_error = "InvalidState - failed to capture frame" not in str(exc)
+            retry_track: Optional[dict] = None
+            verify_cleanup_state = False
             async with self._playback_lock:
-                if expected_generation != self._playback_generation:
-                    logger.info("Ignoring playback recovery (generation changed)")
-                    return
-                current_source = self._track_source_ref(self.audio_queue.current)
-                if expected_source and current_source and current_source != expected_source:
-                    logger.info("Ignoring playback recovery (track changed)")
+                if not self._matches_expected_playback_state(
+                    expected_generation,
+                    expected_source,
+                    context="playback recovery",
+                ):
                     return
 
                 self._cancel_auto_advance()
                 self._current_track_started_at = None
 
-                if self.audio_queue.queue:
-                    await self._advance_queue(room_id, force_next=True, pre_stop=False)
-                    return
+                candidate_retry_track = self.audio_queue.current
+                if (
+                    self.config.STREAM_RETRY_TO_FILE_ON_FAIL
+                    and isinstance(candidate_retry_track, dict)
+                    and not candidate_retry_track.get("file")
+                    and isinstance(candidate_retry_track.get("stream_url"), str)
+                ):
+                    retry_track = candidate_retry_track
 
-                if self.audio_queue.current is not None:
-                    self.audio_queue.current = None
+            if retry_track is not None:
+                await self.send_message(
+                    room_id,
+                    "⚠️ Stream failed. Retrying from cached file...",
+                    priority="critical",
+                )
+                fallback_ok = await self._retry_stream_track_as_file(room_id, retry_track)
+                if fallback_ok:
+                    await self.send_message(room_id, f"▶️ Now playing: {retry_track['title']}")
+                    return
+                verify_cleanup_state = True
+
+            cleanup_ok = await self._cleanup_failed_playback(
+                room_id,
+                expected_generation,
+                expected_source,
+                verify_state=verify_cleanup_state,
+            )
+            if not cleanup_ok:
+                return
+
+            if notify_error:
+                await self.send_message(room_id, f"❌ Playback worker error: {exc}")
             return
 
         if expected_generation != self._playback_generation:
