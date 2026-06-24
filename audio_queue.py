@@ -257,8 +257,7 @@ class AudioQueue:
         """Return whether yt-dlp reported an unavailable requested format."""
         lowered = (message or "").casefold()
         return (
-            "requested format is not available" in lowered
-            or "format is not available" in lowered
+            "format is not available" in lowered
             or "format not available" in lowered
         )
 
@@ -529,7 +528,7 @@ class AudioQueue:
                 attempt_index, extractor_args, error_message, extractor_arg_variants
             ):
                 logger.warning(
-                    "yt-dlp stream lookup hit unavailable format with alternative YouTube clients; retrying without custom player-client extractor arguments"
+                    "yt-dlp stream lookup hit unavailable format; retrying without custom player-client extractor arguments"
                 )
                 continue
             return False, error_message
@@ -729,7 +728,7 @@ class AudioQueue:
                     attempt_index, extractor_args, error_msg, extractor_arg_variants
                 ):
                     logger.warning(
-                        "yt-dlp download hit unavailable format with alternative YouTube clients; retrying without custom player-client extractor arguments"
+                        "yt-dlp download hit unavailable format; retrying without custom player-client extractor arguments"
                     )
                     continue
 
