@@ -263,20 +263,20 @@ class AudioQueue:
         )
 
     def _ytdlp_extractor_arg_variants(self, target: str) -> list[list[str]]:
-        """Return preferred extractor-arg fallbacks for the given target."""
+        """Return extractor-arg variants to try in order, with empty-args fallback for YouTube."""
         primary = self._ytdlp_youtube_args()
         if self.is_youtube_target(target):
             return [primary, []]
         return [primary]
 
     @staticmethod
-    def should_retry_with_default_youtube_clients(
+    def should_retry_without_extractor_args(
         attempt_index: int,
         extractor_args: list[str],
         error_message: str,
         extractor_arg_variants: list[list[str]],
     ) -> bool:
-        """Return whether to retry without custom YouTube client extractor args."""
+        """Return whether to retry the next variant without custom extractor args."""
         return (
             attempt_index + 1 < len(extractor_arg_variants)
             and len(extractor_args) > 0
@@ -525,11 +525,11 @@ class AudioQueue:
 
             error_message = stderr.strip() or "Failed to resolve stream URL"
             last_error = error_message
-            if self.should_retry_with_default_youtube_clients(
+            if self.should_retry_without_extractor_args(
                 attempt_index, extractor_args, error_message, extractor_arg_variants
             ):
                 logger.warning(
-                    "yt-dlp stream lookup hit unavailable format with alternative YouTube clients; retrying with default client selection"
+                    "yt-dlp stream lookup hit unavailable format with alternative YouTube clients; retrying without custom player-client extractor arguments"
                 )
                 continue
             return False, error_message
@@ -725,11 +725,11 @@ class AudioQueue:
 
                 error_msg = stderr.decode().strip() if stderr else "Unknown error"
                 last_error = error_msg
-                if self.should_retry_with_default_youtube_clients(
+                if self.should_retry_without_extractor_args(
                     attempt_index, extractor_args, error_msg, extractor_arg_variants
                 ):
                     logger.warning(
-                        "yt-dlp download hit unavailable format with alternative YouTube clients; retrying with default client selection"
+                        "yt-dlp download hit unavailable format with alternative YouTube clients; retrying without custom player-client extractor arguments"
                     )
                     continue
 
