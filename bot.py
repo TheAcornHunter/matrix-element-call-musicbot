@@ -695,6 +695,29 @@ class IntegratedBot:
             return False
         return True
 
+    async def _cleanup_failed_playback(
+        self,
+        room_id: str,
+        expected_generation: int,
+        expected_source: Optional[str],
+        *,
+        verify_state: bool,
+    ) -> bool:
+        async with self._playback_lock:
+            if verify_state and not self._matches_expected_playback_state(
+                expected_generation,
+                expected_source,
+                context="playback recovery cleanup",
+            ):
+                return False
+            if self.audio_queue.queue:
+                await self._advance_queue(room_id, force_next=True, pre_stop=False)
+                return True
+
+            if self.audio_queue.current is not None:
+                self.audio_queue.current = None
+        return True
+
     async def _wait_for_worker_playback(
         self,
         room_id: str,
@@ -709,7 +732,7 @@ class IntegratedBot:
             logger.error(f"Call worker playback error: {exc}")
             notify_error = "InvalidState - failed to capture frame" not in str(exc)
             retry_track: Optional[dict] = None
-            cleanup_without_retry = False
+            verify_cleanup_state = False
             async with self._playback_lock:
                 if not self._matches_expected_playback_state(
                     expected_generation,
@@ -730,7 +753,7 @@ class IntegratedBot:
                 ):
                     retry_track = candidate_retry_track
                 else:
-                    cleanup_without_retry = True
+                    verify_cleanup_state = False
 
             if retry_track is not None:
                 await self.send_message(
@@ -742,26 +765,16 @@ class IntegratedBot:
                 if fallback_ok:
                     await self.send_message(room_id, f"▶️ Now playing: {retry_track['title']}")
                     return
+                verify_cleanup_state = True
 
-            if cleanup_without_retry:
-                if self.audio_queue.queue:
-                    await self._advance_queue(room_id, force_next=True, pre_stop=False)
-                elif self.audio_queue.current is not None:
-                    self.audio_queue.current = None
-            else:
-                async with self._playback_lock:
-                    if not self._matches_expected_playback_state(
-                        expected_generation,
-                        expected_source,
-                        context="playback recovery cleanup",
-                    ):
-                        return
-                    if self.audio_queue.queue:
-                        await self._advance_queue(room_id, force_next=True, pre_stop=False)
-                        return
-
-                    if self.audio_queue.current is not None:
-                        self.audio_queue.current = None
+            cleanup_ok = await self._cleanup_failed_playback(
+                room_id,
+                expected_generation,
+                expected_source,
+                verify_state=verify_cleanup_state,
+            )
+            if not cleanup_ok:
+                return
 
             if notify_error:
                 await self.send_message(room_id, f"❌ Playback worker error: {exc}")
