@@ -703,6 +703,7 @@ class IntegratedBot:
         *,
         verify_state: bool,
     ) -> bool:
+        """Return False only when cleanup is skipped due to a state mismatch."""
         async with self._playback_lock:
             if verify_state and not self._matches_expected_playback_state(
                 expected_generation,
@@ -752,8 +753,6 @@ class IntegratedBot:
                     and isinstance(candidate_retry_track.get("stream_url"), str)
                 ):
                     retry_track = candidate_retry_track
-                else:
-                    verify_cleanup_state = False
 
             if retry_track is not None:
                 await self.send_message(

@@ -17,6 +17,8 @@ from bot import IntegratedBot
 
 
 class IntegratedBotStreamRetryTests(unittest.IsolatedAsyncioTestCase):
+    WORKER_ERROR = "ffmpeg exited with code 1: 403"
+
     def make_bot(self, *, retry_enabled: bool = True):
         bot = object.__new__(IntegratedBot)
         bot.config = SimpleNamespace(STREAM_RETRY_TO_FILE_ON_FAIL=retry_enabled)
@@ -39,7 +41,7 @@ class IntegratedBotStreamRetryTests(unittest.IsolatedAsyncioTestCase):
             "stream_url": "https://rr.example/audio",
         }
         bot.audio_queue.current = track
-        bot.call_worker.wait_for_playback_terminal.side_effect = RuntimeError("ffmpeg exited with code 1: 403")
+        bot.call_worker.wait_for_playback_terminal.side_effect = RuntimeError(self.WORKER_ERROR)
         bot._retry_stream_track_as_file.return_value = True
 
         await IntegratedBot._wait_for_worker_playback(
@@ -70,7 +72,7 @@ class IntegratedBotStreamRetryTests(unittest.IsolatedAsyncioTestCase):
             "stream_url": "https://rr.example/audio",
         }
         bot.audio_queue.current = track
-        bot.call_worker.wait_for_playback_terminal.side_effect = RuntimeError("ffmpeg exited with code 1: 403")
+        bot.call_worker.wait_for_playback_terminal.side_effect = RuntimeError(self.WORKER_ERROR)
         bot._retry_stream_track_as_file.return_value = False
 
         await IntegratedBot._wait_for_worker_playback(
@@ -85,7 +87,7 @@ class IntegratedBotStreamRetryTests(unittest.IsolatedAsyncioTestCase):
         bot._advance_queue.assert_not_awaited()
         self.assertEqual(
             bot.send_message.await_args_list[-1].args,
-            ("!room:test", "❌ Playback worker error: ffmpeg exited with code 1: 403"),
+            ("!room:test", f"❌ Playback worker error: {self.WORKER_ERROR}"),
         )
 
 
