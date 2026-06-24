@@ -108,6 +108,15 @@ function useStickyMembershipEvents(membershipMode) {
     return membershipMode !== "legacy";
 }
 
+function parseMatrixUserLocalpart(userId) {
+    if (typeof userId !== "string") return "";
+    const trimmed = userId.trim();
+    if (!trimmed.startsWith("@")) return "";
+    const colonIndex = trimmed.indexOf(":");
+    const localpart = colonIndex > 1 ? trimmed.slice(1, colonIndex) : trimmed.slice(1);
+    return localpart.trim();
+}
+
 function shouldFallbackToLegacyAuth(error) {
     const status = error && typeof error.status === "number" ? error.status : null;
     return status === 404 || status === 405 || status === 501;
@@ -444,6 +453,41 @@ class CallWorker {
         this._livekitEventHandlersAttached = false;
         this._remoteAudioMonitors = new Map();
         this._remoteMonitorCounter = 0;
+        this._selfIdentityCandidates = new Set();
+    }
+
+    _refreshSelfIdentityCandidates(room = this.livekitRoom) {
+        const next = new Set();
+        if (this.userId) {
+            next.add(String(this.userId));
+            const localpart = parseMatrixUserLocalpart(this.userId);
+            if (localpart) {
+                next.add(localpart);
+            }
+        }
+        const localIdentity = room?.localParticipant?.identity;
+        if (localIdentity) {
+            next.add(String(localIdentity));
+        }
+        this._selfIdentityCandidates = next;
+    }
+
+    _isSelfParticipant(participant) {
+        if (!participant) {
+            return false;
+        }
+        if (participant.isLocal === true) {
+            return true;
+        }
+        const identity = participant.identity ? String(participant.identity) : "";
+        if (identity && this._selfIdentityCandidates.has(identity)) {
+            return true;
+        }
+        const localSid = this.livekitRoom?.localParticipant?.sid;
+        if (localSid && participant.sid && participant.sid === localSid) {
+            return true;
+        }
+        return false;
     }
 
     setVolumePercent(value) {
@@ -469,11 +513,12 @@ class CallWorker {
         if (this._livekitEventHandlersAttached || !room || !audioSettings.ducking.enabled) {
             return;
         }
+        this._refreshSelfIdentityCandidates(room);
 
         const onActiveSpeakersChanged = (speakers) => {
             try {
                 const activeCount = (Array.isArray(speakers) ? speakers : []).filter(
-                    (participant) => participant && participant.identity && participant.identity !== this.userId,
+                    (participant) => participant && participant.identity && !this._isSelfParticipant(participant),
                 ).length;
                 this.duckingController.setActiveSpeakers(activeCount, Date.now());
             } catch (error) {
@@ -548,7 +593,7 @@ class CallWorker {
             return;
         }
         const participantIdentity = participant?.identity;
-        if (!participantIdentity || participantIdentity === this.userId) {
+        if (!participantIdentity || this._isSelfParticipant(participant)) {
             return;
         }
         const trackSid = track.sid || `${participantIdentity}:fallback:${this._remoteMonitorCounter++}`;
