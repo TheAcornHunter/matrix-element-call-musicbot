@@ -237,11 +237,7 @@ class AudioQueue:
         if candidate.casefold().startswith("ytsearch"):
             return True
 
-        try:
-            parsed = urlparse(candidate)
-        except Exception:
-            return False
-
+        parsed = urlparse(candidate)
         host = (parsed.hostname or "").lower()
         return host in {
             "youtube.com",
@@ -262,7 +258,12 @@ class AudioQueue:
         )
 
     def _ytdlp_extractor_arg_variants(self, target: str) -> list[list[str]]:
-        """Return extractor-arg variants to try in order, with empty-args fallback for YouTube."""
+        """Return extractor-arg variants to try in order.
+
+        YouTube targets first use the custom player-client extractor arguments and
+        then fall back to an empty list, which removes those custom arguments on
+        retry when yt-dlp reports an unavailable format.
+        """
         primary = self._ytdlp_youtube_args()
         if self.is_youtube_target(target):
             return [primary, []]

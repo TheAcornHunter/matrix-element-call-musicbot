@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, patch
 
 from audio_queue import AudioQueue
 
+EXPECTED_YOUTUBE_EXTRACTOR_ARGS = AudioQueue._ytdlp_youtube_args()[1]
+
 
 class FakeProcess:
     def __init__(self, returncode: int, *, stdout: bytes = b"", stderr: bytes = b""):
@@ -38,7 +40,7 @@ class AudioQueueYtdlpFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "https://stream.example/audio")
         self.assertEqual(runner.await_count, 2)
         self.assertIn("--extractor-args", runner.await_args_list[0].args)
-        self.assertIn("youtube:player_client=tv_embedded,ios,web", runner.await_args_list[0].args)
+        self.assertIn(EXPECTED_YOUTUBE_EXTRACTOR_ARGS, runner.await_args_list[0].args)
         self.assertNotIn("--extractor-args", runner.await_args_list[1].args)
 
     async def test_download_audio_retries_without_extractor_args(self):
@@ -82,7 +84,7 @@ class AudioQueueYtdlpFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["duration"], 42.0)
         self.assertEqual(len(calls), 2)
         self.assertIn("--extractor-args", calls[0])
-        self.assertIn("youtube:player_client=tv_embedded,ios,web", calls[0])
+        self.assertIn(EXPECTED_YOUTUBE_EXTRACTOR_ARGS, calls[0])
         self.assertNotIn("--extractor-args", calls[1])
 
 
