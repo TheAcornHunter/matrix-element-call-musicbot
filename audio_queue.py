@@ -491,6 +491,7 @@ class AudioQueue:
             base_cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
 
         extractor_arg_variants = self._ytdlp_extractor_arg_variants(target)
+        last_error = "Failed to resolve stream URL"
         for attempt_index, extractor_args in enumerate(extractor_arg_variants):
             cmd = [*base_cmd, *extractor_args, *self._ytdlp_cookies_args(), target]
             code, stdout, stderr = await self._run_command(*cmd)
@@ -501,6 +502,7 @@ class AudioQueue:
                 return True, lines[0]
 
             error_message = stderr.strip() or "Failed to resolve stream URL"
+            last_error = error_message
             if (
                 attempt_index + 1 < len(extractor_arg_variants)
                 and extractor_args
@@ -512,7 +514,7 @@ class AudioQueue:
                 continue
             return False, error_message
 
-        return False, "Failed to resolve stream URL"
+        return False, last_error
 
     async def resolve_playlist_entries(self, url: str) -> tuple[bool, dict | str]:
         """Resolve playlist metadata and entry URLs for a playlist URL.
@@ -689,17 +691,20 @@ class AudioQueue:
         )
 
         try:
-            process = None
             extractor_arg_variants = self._ytdlp_extractor_arg_variants(source_url)
+            download_succeeded = False
+            last_error = "Failed to download audio"
             for attempt_index, extractor_args in enumerate(extractor_arg_variants):
                 cmd = [*base_cmd, *extractor_args, *self._ytdlp_cookies_args(), source_url]
                 process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                 _, stderr = await process.communicate()
 
                 if process.returncode == 0:
+                    download_succeeded = True
                     break
 
                 error_msg = stderr.decode().strip() if stderr else "Unknown error"
+                last_error = error_msg
                 if (
                     attempt_index + 1 < len(extractor_arg_variants)
                     and extractor_args
@@ -713,8 +718,8 @@ class AudioQueue:
                 logger.error(f"yt-dlp failed: {error_msg}")
                 return False, error_msg
 
-            if process is None or process.returncode != 0:
-                return False, "Unknown error"
+            if not download_succeeded:
+                return False, last_error
 
             temp_candidates = [
                 p

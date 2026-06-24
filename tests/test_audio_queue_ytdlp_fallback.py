@@ -64,7 +64,8 @@ class AudioQueueYtdlpFallbackTests(unittest.IsolatedAsyncioTestCase):
                 output_pattern.write_bytes(b"RIFF")
                 return FakeProcess(0)
 
-            which_side_effect = lambda value: "/usr/bin/yt-dlp" if value == "yt-dlp" else None
+            def which_side_effect(value):
+                return "/usr/bin/yt-dlp" if value == "yt-dlp" else None
 
             with (
                 patch("audio_queue.shutil.which", side_effect=which_side_effect),
