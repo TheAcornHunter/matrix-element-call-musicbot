@@ -86,11 +86,13 @@ class AudioQueue:
 
         Using ``tv_embedded`` as the primary client avoids YouTube's bot-detection
         sign-in wall for public videos without requiring browser cookies.  The
-        ``web`` client is kept as a fallback for content the TV client cannot
-        access.  This mirrors the workaround documented at
-        https://github.com/yt-dlp/yt-dlp/issues/10128.
+        ``ios`` client is included as a secondary option because ``tv_embedded``
+        does not always expose all audio formats, which causes yt-dlp to report
+        "Requested format is not available".  ``web`` is kept as a final fallback
+        for content the other clients cannot access.  This mirrors the workaround
+        documented at https://github.com/yt-dlp/yt-dlp/issues/10128.
         """
-        return ["--extractor-args", "youtube:player_client=tv_embedded,web"]
+        return ["--extractor-args", "youtube:player_client=tv_embedded,ios,web"]
 
     def _is_cache_audio_path(self, path: Path) -> bool:
         if not path.is_file():
@@ -446,7 +448,7 @@ class AudioQueue:
             dlp_cmd,
             "--no-playlist",
             "-f",
-            "bestaudio",
+            "bestaudio/best",
             "--get-url",
             "--extractor-retries",
             str(self.extractor_retries),
