@@ -13,22 +13,6 @@ nio_stub.MatrixRoom = object
 nio_stub.RoomMessageText = object
 sys.modules.setdefault("nio", nio_stub)
 
-config_stub = ModuleType("config")
-config_stub.Config = object
-sys.modules.setdefault("config", config_stub)
-
-audio_queue_stub = ModuleType("audio_queue")
-audio_queue_stub.AudioQueue = object
-sys.modules.setdefault("audio_queue", audio_queue_stub)
-
-call_worker_process_stub = ModuleType("call_worker_process")
-call_worker_process_stub.CallWorkerProcess = object
-sys.modules.setdefault("call_worker_process", call_worker_process_stub)
-
-saved_queues_stub = ModuleType("saved_queues")
-saved_queues_stub.SavedQueueStore = object
-sys.modules.setdefault("saved_queues", saved_queues_stub)
-
 from bot import IntegratedBot
 
 
