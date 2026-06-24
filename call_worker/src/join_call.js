@@ -20,7 +20,7 @@ const {
     dispose,
 } = require("@livekit/rtc-node");
 const { DuckingController } = require("./ducking");
-const { parseMatrixUserLocalpart } = require("./matrix_identity");
+const { buildSelfIdentityCandidates, isSelfParticipant } = require("./self_identity_matcher");
 
 rootLogger.setLevel("WARN");
 
@@ -450,38 +450,18 @@ class CallWorker {
 
     _refreshSelfIdentityCandidates(roomParam) {
         const room = roomParam || this.livekitRoom;
-        const next = new Set();
-        if (this.userId) {
-            next.add(String(this.userId));
-            const localpart = parseMatrixUserLocalpart(this.userId);
-            if (localpart) {
-                // Some deployments expose LiveKit participant.identity as Matrix localpart
-                // instead of full MXID, so keep both variants for self filtering.
-                next.add(localpart);
-            }
-        }
-        const localIdentity = room?.localParticipant?.identity;
-        if (localIdentity) {
-            next.add(String(localIdentity));
-        }
-        this._selfIdentityCandidates = next;
+        this._selfIdentityCandidates = buildSelfIdentityCandidates({
+            userId: this.userId,
+            localParticipantIdentity: room?.localParticipant?.identity,
+        });
     }
 
     _isSelfParticipant(participant) {
-        if (!participant) {
-            return false;
-        }
-        if (participant.isLocal === true) {
-            return true;
-        }
-        if (participant.identity && this._selfIdentityCandidates.has(String(participant.identity))) {
-            return true;
-        }
-        const localSid = this.livekitRoom?.localParticipant?.sid;
-        if (localSid && participant.sid && participant.sid === localSid) {
-            return true;
-        }
-        return false;
+        return isSelfParticipant({
+            participant,
+            selfIdentityCandidates: this._selfIdentityCandidates,
+            localParticipantSid: this.livekitRoom?.localParticipant?.sid,
+        });
     }
 
     setVolumePercent(value) {
