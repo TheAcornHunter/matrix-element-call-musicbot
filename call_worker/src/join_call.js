@@ -474,8 +474,7 @@ class CallWorker {
         if (participant.isLocal === true) {
             return true;
         }
-        const identity = participant.identity ? String(participant.identity) : "";
-        if (identity && this._selfIdentityCandidates.has(identity)) {
+        if (participant.identity && this._selfIdentityCandidates.has(String(participant.identity))) {
             return true;
         }
         const localSid = this.livekitRoom?.localParticipant?.sid;
