@@ -253,6 +253,8 @@ class Config:
             "stream_retry_to_file_on_fail",
             self.DEFAULTS["audio.stream_retry_to_file_on_fail"],
         )
+        _cookies_raw = self._get_str("YTDLP_COOKIES_FILE", "audio", "ytdlp_cookies_file")
+        self.YTDLP_COOKIES_FILE: Optional[Path] = Path(_cookies_raw) if _cookies_raw else None
 
         self.WORKER_LOG_MAX_BYTES = self._get_nonnegative_int(
             "WORKER_LOG_MAX_BYTES", "worker", "log_max_bytes", self.DEFAULTS["worker.log_max_bytes"]

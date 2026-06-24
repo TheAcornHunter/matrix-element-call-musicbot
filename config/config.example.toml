@@ -38,6 +38,7 @@ audio_quality = "best" # best | medium | worst
 stream_first_idle = true
 stream_prefetch_current = true
 stream_retry_to_file_on_fail = true
+# ytdlp_cookies_file = "config/cookies.txt"  # Path to a Netscape-format cookies file for yt-dlp (e.g. to bypass YouTube bot checks)
 
 auto_advance_buffer = 2.0
 preroll_silence = 1.0
