@@ -20,6 +20,7 @@ const {
     dispose,
 } = require("@livekit/rtc-node");
 const { DuckingController } = require("./ducking");
+const { parseMatrixUserLocalpart } = require("./matrix_identity");
 
 rootLogger.setLevel("WARN");
 
@@ -106,15 +107,6 @@ function parseMembershipModeEnv() {
 
 function useStickyMembershipEvents(membershipMode) {
     return membershipMode !== "legacy";
-}
-
-function parseMatrixUserLocalpart(userId) {
-    if (typeof userId !== "string") return "";
-    const trimmed = userId.trim();
-    if (!trimmed.startsWith("@")) return "";
-    const colonIndex = trimmed.indexOf(":");
-    const localpart = colonIndex > 1 ? trimmed.slice(1, colonIndex) : trimmed.slice(1);
-    return localpart.trim();
 }
 
 function shouldFallbackToLegacyAuth(error) {
@@ -456,7 +448,8 @@ class CallWorker {
         this._selfIdentityCandidates = new Set();
     }
 
-    _refreshSelfIdentityCandidates(room = this.livekitRoom) {
+    _refreshSelfIdentityCandidates(roomParam) {
+        const room = roomParam || this.livekitRoom;
         const next = new Set();
         if (this.userId) {
             next.add(String(this.userId));
