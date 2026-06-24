@@ -10,12 +10,16 @@ const { MatrixRTCSessionManager, MatrixRTCSessionEvent } = require("matrix-js-sd
 const {
     AudioFrame,
     AudioSource,
+    AudioStream,
     LocalAudioTrack,
+    RemoteAudioTrack,
     Room,
+    RoomEvent,
     TrackPublishOptions,
     TrackSource,
     dispose,
 } = require("@livekit/rtc-node");
+const { DuckingController } = require("./ducking");
 
 rootLogger.setLevel("WARN");
 
@@ -33,12 +37,21 @@ const MEMBERSHIP_MODES = new Set(["matrix2_auto", "matrix2", "legacy"]);
 const STALL_TIMEOUT_MS = 10_000;
 const STOP_GRACE_MS = 300;
 const STOP_HARD_TIMEOUT_MS = 1200;
-const VOLUME_RAMP_STEP_PER_SAMPLE = 0.0005;
 
 function clampInt16(value) {
     if (value > 32767) return 32767;
     if (value < -32768) return -32768;
     return value;
+}
+
+function stepGainTowards(gain, targetGain, stepPerSample) {
+    if (gain < targetGain) {
+        return Number.isFinite(stepPerSample) ? Math.min(targetGain, gain + stepPerSample) : targetGain;
+    }
+    if (gain > targetGain) {
+        return Number.isFinite(stepPerSample) ? Math.max(targetGain, gain - stepPerSample) : targetGain;
+    }
+    return gain;
 }
 
 function normalizeVolumePercent(value) {
@@ -62,6 +75,19 @@ function parseNonNegativeIntEnv(name, defaultValue) {
     const parsed = Number.parseInt(raw, 10);
     if (!Number.isFinite(parsed) || parsed < 0) return defaultValue;
     return parsed;
+}
+
+function parseNonNegativeFloatEnv(name, defaultValue) {
+    const raw = process.env[name];
+    if (!raw) return defaultValue;
+    const parsed = Number.parseFloat(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) return defaultValue;
+    return parsed;
+}
+
+function parseClampedIntEnv(name, defaultValue, minValue, maxValue) {
+    const parsed = parseNonNegativeIntEnv(name, defaultValue);
+    return Math.max(minValue, Math.min(maxValue, Math.trunc(parsed)));
 }
 
 function parseMembershipModeEnv() {
@@ -110,6 +136,15 @@ const audioSettings = {
     normalizeAudio: parseBoolEnv("NORMALIZE_AUDIO", false),
     fadeInMs: parseNonNegativeIntEnv("FADE_IN_MS", 120),
     volumePercent: parseNonNegativeIntEnv("VOLUME_PERCENT", 100),
+    ducking: {
+        enabled: parseBoolEnv("DUCKING_ENABLED", false),
+        duckToPercent: parseClampedIntEnv("DUCK_TO_PERCENT", 35, 0, 200),
+        attackMs: parseNonNegativeIntEnv("DUCKING_ATTACK_MS", 120),
+        releaseMs: parseNonNegativeIntEnv("DUCKING_RELEASE_MS", 500),
+        holdMs: parseNonNegativeIntEnv("DUCKING_HOLD_MS", 250),
+        vadThreshold: parseNonNegativeFloatEnv("DUCKING_VAD_THRESHOLD", 0.015),
+        minActiveSpeakers: Math.max(1, parseNonNegativeIntEnv("DUCKING_MIN_ACTIVE_SPEAKERS", 1)),
+    },
 };
 
 const WORKER_LOG_MAX_BYTES = parseNonNegativeIntEnv("WORKER_LOG_MAX_BYTES", 2_000_000);
@@ -402,6 +437,13 @@ class CallWorker {
         this.playbackQueue = Promise.resolve();
         this.currentVolumeGain = normalizeVolumePercent(audioSettings.volumePercent) / 100;
         this.targetVolumeGain = this.currentVolumeGain;
+        this.duckingController = new DuckingController(audioSettings.ducking, {
+            sampleRate: SAMPLE_RATE,
+            frameMs: FRAME_MS,
+        });
+        this._livekitEventHandlersAttached = false;
+        this._remoteAudioMonitors = new Map();
+        this._remoteMonitorCounter = 0;
     }
 
     setVolumePercent(value) {
@@ -409,6 +451,143 @@ class CallWorker {
         this.targetVolumeGain = normalizedPercent / 100;
         audioSettings.volumePercent = normalizedPercent;
         logLine(`volume target updated percent=${normalizedPercent} gain=${this.targetVolumeGain.toFixed(3)}`);
+    }
+
+    _computeFrameRmsNormalized(frame) {
+        if (!frame || !frame.data || frame.data.length === 0) {
+            return 0;
+        }
+        let sumSquares = 0;
+        for (let i = 0; i < frame.data.length; i += 1) {
+            const sample = frame.data[i] / 32768;
+            sumSquares += sample * sample;
+        }
+        return Math.sqrt(sumSquares / frame.data.length);
+    }
+
+    _attachLiveKitDuckingHandlers(room) {
+        if (this._livekitEventHandlersAttached || !room || !audioSettings.ducking.enabled) {
+            return;
+        }
+
+        const onActiveSpeakersChanged = (speakers) => {
+            try {
+                const activeCount = (Array.isArray(speakers) ? speakers : []).filter(
+                    (participant) => participant && participant.identity && participant.identity !== this.userId,
+                ).length;
+                this.duckingController.setActiveSpeakers(activeCount, Date.now());
+            } catch (error) {
+                logLine(`ducking active-speaker event error: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        };
+
+        const onTrackSubscribed = (track, _publication, participant) => {
+            this._startRemoteAudioMonitor(track, participant);
+        };
+
+        const onTrackUnsubscribed = (track) => {
+            this._stopRemoteAudioMonitor(track?.sid || "");
+        };
+
+        room.on(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
+        room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
+        room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
+
+        for (const participant of room.remoteParticipants.values()) {
+            for (const publication of participant.trackPublications.values()) {
+                if (publication?.track) {
+                    this._startRemoteAudioMonitor(publication.track, participant);
+                }
+            }
+        }
+
+        this._livekitEventHandlersAttached = true;
+        this._onActiveSpeakersChanged = onActiveSpeakersChanged;
+        this._onTrackSubscribed = onTrackSubscribed;
+        this._onTrackUnsubscribed = onTrackUnsubscribed;
+    }
+
+    _detachLiveKitDuckingHandlers(room) {
+        if (!this._livekitEventHandlersAttached || !room) {
+            return;
+        }
+        room.off(RoomEvent.ActiveSpeakersChanged, this._onActiveSpeakersChanged);
+        room.off(RoomEvent.TrackSubscribed, this._onTrackSubscribed);
+        room.off(RoomEvent.TrackUnsubscribed, this._onTrackUnsubscribed);
+        this._livekitEventHandlersAttached = false;
+        this._onActiveSpeakersChanged = null;
+        this._onTrackSubscribed = null;
+        this._onTrackUnsubscribed = null;
+        this.duckingController.setActiveSpeakers(0, Date.now());
+    }
+
+    _stopRemoteAudioMonitor(trackSid) {
+        if (!trackSid) {
+            return;
+        }
+        const monitor = this._remoteAudioMonitors.get(trackSid);
+        if (!monitor) {
+            return;
+        }
+        monitor.closed = true;
+        this._remoteAudioMonitors.delete(trackSid);
+        monitor.reader.cancel().catch(() => {});
+    }
+
+    _stopAllRemoteAudioMonitors() {
+        for (const [trackSid] of this._remoteAudioMonitors.entries()) {
+            this._stopRemoteAudioMonitor(trackSid);
+        }
+    }
+
+    _startRemoteAudioMonitor(track, participant) {
+        if (!audioSettings.ducking.enabled) {
+            return;
+        }
+        if (!(track instanceof RemoteAudioTrack)) {
+            return;
+        }
+        const participantIdentity = participant?.identity;
+        if (!participantIdentity || participantIdentity === this.userId) {
+            return;
+        }
+        const trackSid = track.sid || `${participantIdentity}:fallback:${this._remoteMonitorCounter++}`;
+        if (this._remoteAudioMonitors.has(trackSid)) {
+            return;
+        }
+
+        const stream = new AudioStream(track, {
+            sampleRate: SAMPLE_RATE,
+            numChannels: CHANNELS,
+            frameSizeMs: FRAME_MS,
+        });
+        const reader = stream.getReader();
+        const monitor = { reader, closed: false };
+        this._remoteAudioMonitors.set(trackSid, monitor);
+
+        void (async () => {
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done || monitor.closed) {
+                        break;
+                    }
+                    const rmsNormalized = this._computeFrameRmsNormalized(value);
+                    this.duckingController.markSpeakerEnergy(participantIdentity, rmsNormalized, Date.now());
+                }
+            } catch (error) {
+                if (!monitor.closed) {
+                    logLine(`ducking monitor error for ${participantIdentity}: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            } finally {
+                this._remoteAudioMonitors.delete(trackSid);
+                try {
+                    reader.releaseLock();
+                } catch (error) {
+                    logLine(`ducking monitor release-lock warning: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+        })();
     }
 
     enqueuePlay(inputSource, title = null, sourceType = "file") {
@@ -507,6 +686,7 @@ class CallWorker {
         }
 
         this.livekitRoom = room;
+        this._attachLiveKitDuckingHandlers(room);
         emit({ event: "livekit_connected", auth_mode: config._auth_mode || "unknown" });
     }
 
@@ -629,13 +809,10 @@ class CallWorker {
                     frameData.set(sourceSamples);
 
                     let gain = this.currentVolumeGain;
-                    const targetGain = this.targetVolumeGain;
+                    const targetGain = this.duckingController.getTargetGain(this.targetVolumeGain, Date.now());
+                    const stepPerSample = this.duckingController.getRampStepPerSample(targetGain < gain);
                     for (let i = 0; i < frameData.length; i += 1) {
-                        if (gain < targetGain) {
-                            gain = Math.min(targetGain, gain + VOLUME_RAMP_STEP_PER_SAMPLE);
-                        } else if (gain > targetGain) {
-                            gain = Math.max(targetGain, gain - VOLUME_RAMP_STEP_PER_SAMPLE);
-                        }
+                        gain = stepGainTowards(gain, targetGain, stepPerSample);
                         frameData[i] = clampInt16(Math.round(frameData[i] * gain));
                     }
                     this.currentVolumeGain = gain;
@@ -676,13 +853,10 @@ class CallWorker {
                 frameData.set(sourceSamples);
 
                 let gain = this.currentVolumeGain;
-                const targetGain = this.targetVolumeGain;
+                const targetGain = this.duckingController.getTargetGain(this.targetVolumeGain, Date.now());
+                const stepPerSample = this.duckingController.getRampStepPerSample(targetGain < gain);
                 for (let i = 0; i < frameData.length; i += 1) {
-                    if (gain < targetGain) {
-                        gain = Math.min(targetGain, gain + VOLUME_RAMP_STEP_PER_SAMPLE);
-                    } else if (gain > targetGain) {
-                        gain = Math.max(targetGain, gain - VOLUME_RAMP_STEP_PER_SAMPLE);
-                    }
+                    gain = stepGainTowards(gain, targetGain, stepPerSample);
                     frameData[i] = clampInt16(Math.round(frameData[i] * gain));
                 }
                 this.currentVolumeGain = gain;
@@ -780,6 +954,8 @@ class CallWorker {
         this.audioSource = null;
 
         if (this.livekitRoom) {
+            this._detachLiveKitDuckingHandlers(this.livekitRoom);
+            this._stopAllRemoteAudioMonitors();
             await this.livekitRoom.disconnect();
             this.livekitRoom = null;
         }
@@ -820,7 +996,11 @@ async function main() {
         logLine(`warning running on Node ${process.versions.node}; LiveKit is best-tested on Node 22 LTS`);
     }
     logLine(
-        `audio settings normalize=${audioSettings.normalizeAudio} fade_in_ms=${audioSettings.fadeInMs} volume_percent=${audioSettings.volumePercent}`,
+        `audio settings normalize=${audioSettings.normalizeAudio} fade_in_ms=${audioSettings.fadeInMs} ` +
+            `volume_percent=${audioSettings.volumePercent} ducking_enabled=${audioSettings.ducking.enabled} ` +
+            `duck_to_percent=${audioSettings.ducking.duckToPercent} attack_ms=${audioSettings.ducking.attackMs} ` +
+            `release_ms=${audioSettings.ducking.releaseMs} hold_ms=${audioSettings.ducking.holdMs} ` +
+            `vad_threshold=${audioSettings.ducking.vadThreshold} min_active_speakers=${audioSettings.ducking.minActiveSpeakers}`,
     );
     logLine(`worker start room=${roomId} membership_mode=${membershipMode}`);
 
@@ -963,11 +1143,15 @@ async function main() {
                 if (Number.isFinite(command.volume_percent) && command.volume_percent >= 0) {
                     worker.setVolumePercent(command.volume_percent);
                 }
+                if (command.ducking && typeof command.ducking === "object") {
+                    worker.duckingController.updateSettings(command.ducking);
+                }
                 emit({
                     event: "audio_settings_updated",
                     normalize_audio: audioSettings.normalizeAudio,
                     fade_in_ms: audioSettings.fadeInMs,
                     volume_percent: audioSettings.volumePercent,
+                    ducking: worker.duckingController.settings,
                 });
                 continue;
             }

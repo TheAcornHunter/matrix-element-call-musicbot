@@ -5,7 +5,8 @@
   "description": "Minimal MatrixRTC call join worker for musicbot",
   "main": "src/join_call.js",
   "scripts": {
-    "join": "node src/join_call.js"
+    "join": "node src/join_call.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@livekit/rtc-node": "^0.13.24",

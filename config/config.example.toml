@@ -45,6 +45,22 @@ normalize_audio = false
 fade_in_ms = 120
 volume_percent = 100 # 0-200
 
+[audio.ducking]
+# Auto-lower music while other participants are speaking.
+enabled = false
+# Target playback volume while ducking (percent of normal output gain, clamped 0-200).
+duck_to_percent = 35
+# Fade-down speed when speech is detected.
+attack_ms = 120
+# Fade-up speed after speech ends and hold expires.
+release_ms = 500
+# Keep ducking active briefly after speech stops to avoid rapid toggling.
+hold_ms = 250
+# Energy threshold for fallback PCM-based speech detection (normalized 0.0-1.0).
+vad_threshold = 0.015
+# Number of simultaneously active non-bot speakers needed to trigger ducking.
+min_active_speakers = 1
+
 [worker]
 max_restart_attempts = 3
 heartbeat_interval_seconds = 10.0
