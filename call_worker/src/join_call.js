@@ -20,6 +20,7 @@ const {
     dispose,
 } = require("@livekit/rtc-node");
 const { DuckingController } = require("./ducking");
+const { buildSelfIdentityCandidates, isSelfParticipant } = require("./self_identity_matcher");
 
 rootLogger.setLevel("WARN");
 
@@ -444,6 +445,23 @@ class CallWorker {
         this._livekitEventHandlersAttached = false;
         this._remoteAudioMonitors = new Map();
         this._remoteMonitorCounter = 0;
+        this._selfIdentityCandidates = new Set();
+    }
+
+    _refreshSelfIdentityCandidates(roomParam) {
+        const room = roomParam || this.livekitRoom;
+        this._selfIdentityCandidates = buildSelfIdentityCandidates({
+            userId: this.userId,
+            localParticipantIdentity: room?.localParticipant?.identity,
+        });
+    }
+
+    _isSelfParticipant(participant) {
+        return isSelfParticipant({
+            participant,
+            selfIdentityCandidates: this._selfIdentityCandidates,
+            localParticipantSid: this.livekitRoom?.localParticipant?.sid,
+        });
     }
 
     setVolumePercent(value) {
@@ -469,11 +487,12 @@ class CallWorker {
         if (this._livekitEventHandlersAttached || !room || !audioSettings.ducking.enabled) {
             return;
         }
+        this._refreshSelfIdentityCandidates(room);
 
         const onActiveSpeakersChanged = (speakers) => {
             try {
                 const activeCount = (Array.isArray(speakers) ? speakers : []).filter(
-                    (participant) => participant && participant.identity && participant.identity !== this.userId,
+                    (participant) => participant && participant.identity && !this._isSelfParticipant(participant),
                 ).length;
                 this.duckingController.setActiveSpeakers(activeCount, Date.now());
             } catch (error) {
@@ -548,7 +567,7 @@ class CallWorker {
             return;
         }
         const participantIdentity = participant?.identity;
-        if (!participantIdentity || participantIdentity === this.userId) {
+        if (!participantIdentity || this._isSelfParticipant(participant)) {
             return;
         }
         const trackSid = track.sid || `${participantIdentity}:fallback:${this._remoteMonitorCounter++}`;
