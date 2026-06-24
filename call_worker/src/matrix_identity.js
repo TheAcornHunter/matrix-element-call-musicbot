@@ -4,7 +4,7 @@ function parseMatrixUserLocalpart(userId) {
     if (!trimmed.startsWith("@")) return "";
     const colonIndex = trimmed.indexOf(":");
     if (colonIndex <= 1) return "";
-    const localpart = trimmed.slice(1, colonIndex).trim();
+    const localpart = trimmed.slice(1, colonIndex);
     return localpart || "";
 }
 
