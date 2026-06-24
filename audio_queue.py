@@ -80,6 +80,18 @@ class AudioQueue:
             return ["--cookies", str(self.cookies_file)]
         return []
 
+    @staticmethod
+    def _ytdlp_youtube_args() -> list[str]:
+        """Return extractor args that select alternative YouTube player clients.
+
+        Using ``tv_embedded`` as the primary client avoids YouTube's bot-detection
+        sign-in wall for public videos without requiring browser cookies.  The
+        ``web`` client is kept as a fallback for content the TV client cannot
+        access.  This mirrors the workaround documented at
+        https://github.com/yt-dlp/yt-dlp/issues/10128.
+        """
+        return ["--extractor-args", "youtube:player_client=tv_embedded,web"]
+
     def _is_cache_audio_path(self, path: Path) -> bool:
         if not path.is_file():
             return False
@@ -350,6 +362,7 @@ class AudioQueue:
         cmd = [dlp_cmd, "--no-playlist", "--dump-single-json", "--extractor-retries", str(self.extractor_retries)]
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
+        cmd.extend(self._ytdlp_youtube_args())
         cmd.extend(self._ytdlp_cookies_args())
         cmd.append(target)
         code, stdout, stderr = await self._run_command(*cmd)
@@ -440,6 +453,7 @@ class AudioQueue:
         ]
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
+        cmd.extend(self._ytdlp_youtube_args())
         cmd.extend(self._ytdlp_cookies_args())
         cmd.append(target)
         code, stdout, stderr = await self._run_command(*cmd)
@@ -480,6 +494,7 @@ class AudioQueue:
         ]
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--lazy-playlist", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
+        cmd.extend(self._ytdlp_youtube_args())
         cmd.extend(self._ytdlp_cookies_args())
         cmd.append(candidate)
         code, stdout, stderr = await self._run_command(*cmd)
@@ -613,6 +628,7 @@ class AudioQueue:
             "-o",
             temp_output,
         ]
+        cmd.extend(self._ytdlp_youtube_args())
         cmd.extend(self._ytdlp_cookies_args())
         cmd.append(source_url)
         if self.search_mode == "fast":
