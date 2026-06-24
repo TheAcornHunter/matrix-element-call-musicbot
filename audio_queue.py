@@ -40,6 +40,7 @@ class AudioQueue:
         extractor_retries: int = 1,
         download_format: str = "wav",
         audio_quality: str = "best",
+        cookies_file: Optional[Path] = None,
     ):
         self.audio_dir = audio_dir
         self.audio_dir.mkdir(parents=True, exist_ok=True)
@@ -66,11 +67,18 @@ class AudioQueue:
         self.audio_quality = str(audio_quality or "best").strip().lower()
         if self.audio_quality not in {"best", "medium", "worst"}:
             self.audio_quality = "best"
+        self.cookies_file: Optional[Path] = cookies_file
 
         # Cache shape: {url: {"file": str, "music_duration": Optional[float]}}
         self.download_cache = {}
         self.search_cache: dict[str, dict] = {}
         self._enforce_size_limit()
+
+    def _ytdlp_cookies_args(self) -> list[str]:
+        """Return --cookies argument for yt-dlp if a cookies file is configured."""
+        if self.cookies_file and self.cookies_file.is_file():
+            return ["--cookies", str(self.cookies_file)]
+        return []
 
     def _is_cache_audio_path(self, path: Path) -> bool:
         if not path.is_file():
@@ -342,6 +350,7 @@ class AudioQueue:
         cmd = [dlp_cmd, "--no-playlist", "--dump-single-json", "--extractor-retries", str(self.extractor_retries)]
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
+        cmd.extend(self._ytdlp_cookies_args())
         cmd.append(target)
         code, stdout, stderr = await self._run_command(*cmd)
         if code != 0:
@@ -431,6 +440,7 @@ class AudioQueue:
         ]
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
+        cmd.extend(self._ytdlp_cookies_args())
         cmd.append(target)
         code, stdout, stderr = await self._run_command(*cmd)
         if code != 0:
@@ -470,6 +480,7 @@ class AudioQueue:
         ]
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--lazy-playlist", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
+        cmd.extend(self._ytdlp_cookies_args())
         cmd.append(candidate)
         code, stdout, stderr = await self._run_command(*cmd)
         if code != 0:
@@ -601,8 +612,9 @@ class AudioQueue:
             str(self.extractor_retries),
             "-o",
             temp_output,
-            source_url,
         ]
+        cmd.extend(self._ytdlp_cookies_args())
+        cmd.append(source_url)
         if self.search_mode == "fast":
             cmd[1:1] = ["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))]
 
