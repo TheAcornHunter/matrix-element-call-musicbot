@@ -255,7 +255,12 @@ class AudioQueue:
     @staticmethod
     def is_unavailable_format_error(message: str) -> bool:
         """Return whether yt-dlp reported an unavailable requested format."""
-        return "requested format is not available" in (message or "").casefold()
+        lowered = (message or "").casefold()
+        return (
+            "requested format is not available" in lowered
+            or "format is not available" in lowered
+            or "format not available" in lowered
+        )
 
     def _ytdlp_extractor_arg_variants(self, target: str) -> list[list[str]]:
         """Return preferred extractor-arg fallbacks for the given target."""
@@ -263,6 +268,20 @@ class AudioQueue:
         if self.is_youtube_target(target):
             return [primary, []]
         return [primary]
+
+    @staticmethod
+    def should_retry_with_default_youtube_clients(
+        attempt_index: int,
+        extractor_args: list[str],
+        error_message: str,
+        extractor_arg_variants: list[list[str]],
+    ) -> bool:
+        """Return whether to retry without custom YouTube client extractor args."""
+        return (
+            attempt_index + 1 < len(extractor_arg_variants)
+            and len(extractor_args) > 0
+            and AudioQueue.is_unavailable_format_error(error_message)
+        )
 
     def get_audio_quality_for_ytdlp(self) -> str:
         quality_map = {
@@ -506,10 +525,8 @@ class AudioQueue:
 
             error_message = stderr.strip() or "Failed to resolve stream URL"
             last_error = error_message
-            if (
-                attempt_index + 1 < len(extractor_arg_variants)
-                and extractor_args
-                and self.is_unavailable_format_error(error_message)
+            if self.should_retry_with_default_youtube_clients(
+                attempt_index, extractor_args, error_message, extractor_arg_variants
             ):
                 logger.warning(
                     "yt-dlp stream lookup hit unavailable format with alternative YouTube clients; retrying with default client selection"
@@ -708,10 +725,8 @@ class AudioQueue:
 
                 error_msg = stderr.decode().strip() if stderr else "Unknown error"
                 last_error = error_msg
-                if (
-                    attempt_index + 1 < len(extractor_arg_variants)
-                    and extractor_args
-                    and self.is_unavailable_format_error(error_msg)
+                if self.should_retry_with_default_youtube_clients(
+                    attempt_index, extractor_args, error_msg, extractor_arg_variants
                 ):
                     logger.warning(
                         "yt-dlp download hit unavailable format with alternative YouTube clients; retrying with default client selection"
